@@ -9,6 +9,31 @@ from .models import AppConfig, FilterConfig, SchedulerConfig, Source
 
 logger = logging.getLogger(__name__)
 
+# Default news sources pre-loaded on first run
+_DEFAULT_SOURCES = [
+    Source(url="http://feeds.bbci.co.uk/news/rss.xml",              name="BBC News"),
+    Source(url="https://feeds.reuters.com/reuters/topNews",          name="Reuters Top News"),
+    Source(url="https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml", name="NY Times"),
+    Source(url="https://feeds.skynews.com/feeds/rss/world.xml",     name="Sky News World"),
+    Source(url="https://techcrunch.com/feed/",                       name="TechCrunch"),
+    Source(url="https://feeds.feedburner.com/TheHackersNews",        name="The Hacker News"),
+]
+
+_DEFAULT_FILTER = FilterConfig(
+    topics=["world", "technology", "business", "science"],
+    keywords=[],
+    relevance_threshold=0.05,
+)
+
+
+def _default_config() -> AppConfig:
+    """Return a ready-to-use AppConfig with popular news sources pre-loaded."""
+    return AppConfig(
+        sources=list(_DEFAULT_SOURCES),
+        filter=_DEFAULT_FILTER,
+        scheduler=SchedulerConfig(generation_hour=7, generation_minute=0),
+    )
+
 _CONFIG_DIR = Path.home() / ".daily-news-podcast"
 _CONFIG_FILE = _CONFIG_DIR / "config.json"
 
@@ -83,11 +108,11 @@ class ConfigStore:
                 data = json.load(f)
             return _app_config_from_dict(data)
         except FileNotFoundError:
-            logger.debug("Config file not found at %s; using defaults.", self._config_file)
-            return AppConfig()
+            logger.debug("Config file not found at %s; using built-in defaults.", self._config_file)
+            return _default_config()
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-            logger.warning("Failed to parse config file %s: %s; using defaults.", self._config_file, exc)
-            return AppConfig()
+            logger.warning("Failed to parse config file %s: %s; using built-in defaults.", self._config_file, exc)
+            return _default_config()
 
     def save(self, config: AppConfig) -> None:
         """Serialize AppConfig to JSON and write to config.json.

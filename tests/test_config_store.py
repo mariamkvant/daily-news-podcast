@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from daily_news_podcast.config_store import ConfigStore
+from daily_news_podcast.config_store import ConfigStore, _default_config
 from daily_news_podcast.models import AppConfig, FilterConfig, SchedulerConfig, Source
 
 
@@ -30,14 +30,18 @@ class TestConfigStoreLoad:
     def test_returns_default_when_file_absent(self, tmp_path):
         store = ConfigStore(config_file=tmp_path / "config.json")
         config = store.load()
-        assert config == AppConfig()
+        # Should return the built-in default config with pre-loaded sources
+        assert config == _default_config()
+        assert len(config.sources) > 0
 
     def test_returns_default_on_invalid_json(self, tmp_path):
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text("not valid json", encoding="utf-8")
         store = ConfigStore(config_file=cfg_file)
         config = store.load()
-        assert config == AppConfig()
+        # Should return the built-in default config with pre-loaded sources
+        assert config == _default_config()
+        assert len(config.sources) > 0
 
     def test_returns_default_on_empty_json_object(self, tmp_path):
         cfg_file = tmp_path / "config.json"

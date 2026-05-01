@@ -129,8 +129,8 @@ class ConfigPanel(ttk.Frame):
         # Onboarding label (shown when list is empty)
         self._onboarding_label = ttk.Label(
             sources_lf,
-            text="⚠ Add at least one news source to get started",
-            foreground="orange",
+            text="ℹ No sources configured — add one or save to restore defaults",
+            foreground="gray",
         )
         self._onboarding_label.pack(pady=(4, 0))
 
@@ -265,6 +265,14 @@ class ConfigPanel(ttk.Frame):
 
     def _save(self) -> None:
         self._config = self._collect_config()
+        # If user removed all sources, restore the built-in defaults
+        if not self._config.sources:
+            from .config_store import _default_config
+            self._config.sources = list(_default_config().sources)
+            self._sources_listbox.delete(0, tk.END)
+            for source in self._config.sources:
+                self._sources_listbox.insert(tk.END, f"{source.name} — {source.url}")
+            self._refresh_onboarding()
         try:
             self._config_store.save(self._config)
             logger.info("Configuration saved.")
