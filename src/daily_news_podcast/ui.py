@@ -9,9 +9,12 @@ Contains:
 """
 
 import logging
+import threading
 import tkinter as tk
+from datetime import date
 from tkinter import messagebox, ttk
 
+from .config_store import AVAILABLE_KEYWORDS, AVAILABLE_TOPICS
 from .models import AppConfig, FilterConfig, SchedulerConfig, Source
 
 logger = logging.getLogger(__name__)
@@ -73,184 +76,343 @@ class _SourceDialog(tk.Toplevel):
 
 
 # ---------------------------------------------------------------------------
+# Helper: simple single-line text input dialog
+# ---------------------------------------------------------------------------
+
+class _TextInputDialog(tk.Toplevel):
+    """Modal dialog for entering a single text value."""
+
+    def __init__(self, parent: tk.Widget, title: str = "Input", prompt: str = "Value:") -> None:
+        super().__init__(parent)
+        self.title(title)
+        self.resizable(False, False)
+        self.grab_set()
+        self.result: str | None = None
+
+        ttk.Label(self, text=prompt).pack(padx=12, pady=(12, 4), anchor="w")
+        self._var = tk.StringVar()
+        entry = ttk.Entry(self, textvariable=self._var, width=36)
+        entry.pack(padx=12, pady=(0, 8))
+        entry.focus_set()
+
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(pady=(0, 12))
+        ttk.Button(btn_frame, text="OK", command=self._on_ok).pack(side="left", padx=6)
+        ttk.Button(btn_frame, text="Cancel", command=self.destroy).pack(side="left", padx=6)
+
+        self.bind("<Return>", lambda _e: self._on_ok())
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+        self.update_idletasks()
+        px = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+        py = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{px}+{py}")
+        self.wait_window(self)
+
+    def _on_ok(self) -> None:
+        val = self._var.get().strip()
+        if val:
+            self.result = val
+        self.destroy()
+
+
+# ---------------------------------------------------------------------------
 # ConfigPanel
 # ---------------------------------------------------------------------------
 
 class ConfigPanel(ttk.Frame):
-    """Left panel: news sources, filter settings, schedule, and save button."""
+    """Left panel: sources (with enable toggle), topic checkboxes, keyword checkboxes, schedule."""
 
     def __init__(self, parent: tk.Widget, config_store, on_config_saved=None) -> None:
         super().__init__(parent, padding=8)
         self._config_store = config_store
         self._on_config_saved = on_config_saved
-
-        # Load current config
         self._config: AppConfig = config_store.load()
 
-        self._build_sources_frame()
-        self._build_filter_frame()
-        self._build_schedule_frame()
-        self._build_save_row()
+        # Notebook: Sources | Topics | Keywords | Schedule
+        self._notebook = ttk.Notebook(self)
+        self._notebook.pack(fill="both", expand=True)
 
-        # Populate widgets from loaded config
+        self._sources_tab = ttk.Frame(self._notebook, padding=6)
+        self._topics_tab  = ttk.Frame(self._notebook, padding=6)
+        self._keywords_tab = ttk.Frame(self._notebook, padding=6)
+        self._schedule_tab = ttk.Frame(self._notebook, padding=6)
+
+        self._notebook.add(self._sources_tab,  text="Sources")
+        self._notebook.add(self._topics_tab,   text="Topics")
+        self._notebook.add(self._keywords_tab, text="Keywords")
+        self._notebook.add(self._schedule_tab, text="Schedule")
+
+        self._build_sources_tab()
+        self._build_topics_tab()
+        self._build_keywords_tab()
+        self._build_schedule_tab()
+
+        ttk.Button(self, text="Save Configuration", command=self._save).pack(pady=(8, 0))
+
         self._populate_from_config()
 
     # ------------------------------------------------------------------
-    # Build helpers
+    # Sources tab
     # ------------------------------------------------------------------
 
-    def _build_sources_frame(self) -> None:
-        sources_lf = ttk.LabelFrame(self, text="News Sources", padding=6)
-        sources_lf.pack(fill="both", expand=False, pady=(0, 8))
+    def _build_sources_tab(self) -> None:
+        tab = self._sources_tab
 
-        # Listbox + scrollbar
-        list_frame = ttk.Frame(sources_lf)
-        list_frame.pack(fill="both", expand=True)
+        # Toolbar: Select All / None + Add custom
+        toolbar = ttk.Frame(tab)
+        toolbar.pack(fill="x", pady=(0, 4))
+        ttk.Button(toolbar, text="All",  width=5, command=self._sources_select_all).pack(side="left", padx=(0, 2))
+        ttk.Button(toolbar, text="None", width=5, command=self._sources_select_none).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="+ Custom", command=self._add_custom_source).pack(side="right")
 
-        scrollbar = ttk.Scrollbar(list_frame, orient="vertical")
-        self._sources_listbox = tk.Listbox(
-            list_frame,
-            height=6,
-            yscrollcommand=scrollbar.set,
-            selectmode="single",
-            activestyle="dotbox",
+        # Scrollable checkbox list
+        container = ttk.Frame(tab)
+        container.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        self._sources_inner = ttk.Frame(canvas)
+
+        self._sources_inner.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
-        scrollbar.config(command=self._sources_listbox.yview)
-        self._sources_listbox.pack(side="left", fill="both", expand=True)
+        canvas.create_window((0, 0), window=self._sources_inner, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # Buttons
-        btn_frame = ttk.Frame(sources_lf)
-        btn_frame.pack(fill="x", pady=(6, 0))
-        ttk.Button(btn_frame, text="Add Source", command=self._add_source).pack(side="left", padx=(0, 4))
-        ttk.Button(btn_frame, text="Edit Source", command=self._edit_source).pack(side="left", padx=4)
-        ttk.Button(btn_frame, text="Remove Source", command=self._remove_source).pack(side="left", padx=4)
+        # Bind mousewheel
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", lambda ev: canvas.yview_scroll(-1*(ev.delta//120), "units")))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
 
-        # Onboarding label (shown when list is empty)
-        self._onboarding_label = ttk.Label(
-            sources_lf,
-            text="ℹ No sources configured — add one or save to restore defaults",
-            foreground="gray",
+        self._source_vars: dict[str, tk.BooleanVar] = {}  # name -> BooleanVar
+        self._source_custom: list[Source] = []            # user-added custom sources
+
+    def _populate_sources(self) -> None:
+        """Rebuild the sources checkbox list from self._config.sources."""
+        for widget in self._sources_inner.winfo_children():
+            widget.destroy()
+        self._source_vars.clear()
+
+        for source in self._config.sources:
+            var = tk.BooleanVar(value=source.enabled)
+            self._source_vars[source.name] = var
+            row = ttk.Frame(self._sources_inner)
+            row.pack(fill="x", pady=1)
+            ttk.Checkbutton(row, variable=var, text=source.name, width=28).pack(side="left")
+
+    def _sources_select_all(self) -> None:
+        for var in self._source_vars.values():
+            var.set(True)
+
+    def _sources_select_none(self) -> None:
+        for var in self._source_vars.values():
+            var.set(False)
+
+    def _add_custom_source(self) -> None:
+        dialog = _SourceDialog(self, title="Add Custom Source")
+        if dialog.result is not None:
+            # Avoid duplicates by name
+            existing_names = {s.name for s in self._config.sources}
+            if dialog.result.name in existing_names:
+                messagebox.showwarning("Duplicate", f"A source named '{dialog.result.name}' already exists.", parent=self)
+                return
+            self._config.sources.append(dialog.result)
+            self._populate_sources()
+
+    # ------------------------------------------------------------------
+    # Topics tab
+    # ------------------------------------------------------------------
+
+    def _build_topics_tab(self) -> None:
+        tab = self._topics_tab
+
+        toolbar = ttk.Frame(tab)
+        toolbar.pack(fill="x", pady=(0, 4))
+        ttk.Button(toolbar, text="All",  width=5, command=self._topics_select_all).pack(side="left", padx=(0, 2))
+        ttk.Button(toolbar, text="None", width=5, command=self._topics_select_none).pack(side="left", padx=2)
+
+        ttk.Label(tab, text="Select topics to include in your podcast:", foreground="gray").pack(anchor="w", pady=(0, 4))
+
+        # Two-column grid of checkboxes
+        grid = ttk.Frame(tab)
+        grid.pack(fill="both", expand=True)
+
+        self._topic_vars: dict[str, tk.BooleanVar] = {}
+        for i, topic in enumerate(AVAILABLE_TOPICS):
+            var = tk.BooleanVar()
+            self._topic_vars[topic] = var
+            ttk.Checkbutton(grid, variable=var, text=topic.capitalize()).grid(
+                row=i // 2, column=i % 2, sticky="w", padx=4, pady=2
+            )
+
+    def _topics_select_all(self) -> None:
+        for var in self._topic_vars.values():
+            var.set(True)
+
+    def _topics_select_none(self) -> None:
+        for var in self._topic_vars.values():
+            var.set(False)
+
+    # ------------------------------------------------------------------
+    # Keywords tab
+    # ------------------------------------------------------------------
+
+    def _build_keywords_tab(self) -> None:
+        tab = self._keywords_tab
+
+        toolbar = ttk.Frame(tab)
+        toolbar.pack(fill="x", pady=(0, 4))
+        ttk.Button(toolbar, text="All",  width=5, command=self._keywords_select_all).pack(side="left", padx=(0, 2))
+        ttk.Button(toolbar, text="None", width=5, command=self._keywords_select_none).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="+ Custom", command=self._add_custom_keyword).pack(side="right")
+
+        ttk.Label(tab, text="Select keywords to boost in relevance scoring:", foreground="gray").pack(anchor="w", pady=(0, 4))
+
+        # Scrollable two-column grid
+        container = ttk.Frame(tab)
+        container.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        self._keywords_inner = ttk.Frame(canvas)
+        self._keywords_inner.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
-        self._onboarding_label.pack(pady=(4, 0))
+        canvas.create_window((0, 0), window=self._keywords_inner, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
-    def _build_filter_frame(self) -> None:
-        filter_lf = ttk.LabelFrame(self, text="Filter Settings", padding=6)
-        filter_lf.pack(fill="both", expand=True, pady=(0, 8))
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", lambda ev: canvas.yview_scroll(-1*(ev.delta//120), "units")))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
 
-        ttk.Label(filter_lf, text="Topics (one per line):").pack(anchor="w")
-        self._topics_text = tk.Text(filter_lf, height=4, width=40, wrap="word")
-        self._topics_text.pack(fill="both", expand=True, pady=(2, 8))
+        self._keyword_vars: dict[str, tk.BooleanVar] = {}
+        self._custom_keywords: list[str] = []
+        self._keywords_canvas = canvas
 
-        ttk.Label(filter_lf, text="Keywords (one per line):").pack(anchor="w")
-        self._keywords_text = tk.Text(filter_lf, height=4, width=40, wrap="word")
-        self._keywords_text.pack(fill="both", expand=True, pady=(2, 0))
+    def _populate_keywords(self) -> None:
+        """Rebuild keyword checkboxes (preset + custom)."""
+        for widget in self._keywords_inner.winfo_children():
+            widget.destroy()
 
-    def _build_schedule_frame(self) -> None:
-        schedule_lf = ttk.LabelFrame(self, text="Schedule", padding=6)
-        schedule_lf.pack(fill="x", pady=(0, 8))
+        all_keywords = list(AVAILABLE_KEYWORDS) + self._custom_keywords
+        # Preserve existing var states
+        existing = {k: v.get() for k, v in self._keyword_vars.items()}
+        self._keyword_vars.clear()
 
-        ttk.Label(schedule_lf, text="Daily generation time:").pack(side="left", padx=(0, 8))
+        for i, kw in enumerate(all_keywords):
+            var = tk.BooleanVar(value=existing.get(kw, False))
+            self._keyword_vars[kw] = var
+            ttk.Checkbutton(self._keywords_inner, variable=var, text=kw.capitalize()).grid(
+                row=i // 2, column=i % 2, sticky="w", padx=4, pady=2
+            )
+
+    def _keywords_select_all(self) -> None:
+        for var in self._keyword_vars.values():
+            var.set(True)
+
+    def _keywords_select_none(self) -> None:
+        for var in self._keyword_vars.values():
+            var.set(False)
+
+    def _add_custom_keyword(self) -> None:
+        dialog = _TextInputDialog(self, title="Add Keyword", prompt="Enter a keyword or phrase:")
+        if dialog.result:
+            kw = dialog.result.strip().lower()
+            if kw and kw not in self._keyword_vars:
+                self._custom_keywords.append(kw)
+                self._populate_keywords()
+                # Tick the new one
+                if kw in self._keyword_vars:
+                    self._keyword_vars[kw].set(True)
+
+    # ------------------------------------------------------------------
+    # Schedule tab
+    # ------------------------------------------------------------------
+
+    def _build_schedule_tab(self) -> None:
+        tab = self._schedule_tab
+
+        # --- Daily generation time ---
+        ttk.Label(tab, text="Daily generation time:").pack(anchor="w", pady=(0, 8))
+
+        time_row = ttk.Frame(tab)
+        time_row.pack(anchor="w")
 
         self._hour_var = tk.IntVar(value=7)
         self._minute_var = tk.IntVar(value=0)
 
-        ttk.Label(schedule_lf, text="Hour:").pack(side="left")
-        self._hour_spinbox = ttk.Spinbox(
-            schedule_lf, from_=0, to=23, textvariable=self._hour_var, width=4
-        )
-        self._hour_spinbox.pack(side="left", padx=(2, 8))
+        ttk.Label(time_row, text="Hour:").pack(side="left")
+        ttk.Spinbox(time_row, from_=0, to=23, textvariable=self._hour_var, width=5).pack(side="left", padx=(4, 12))
+        ttk.Label(time_row, text="Minute:").pack(side="left")
+        ttk.Spinbox(time_row, from_=0, to=59, textvariable=self._minute_var, width=5).pack(side="left", padx=4)
 
-        ttk.Label(schedule_lf, text="Minute:").pack(side="left")
-        self._minute_spinbox = ttk.Spinbox(
-            schedule_lf, from_=0, to=59, textvariable=self._minute_var, width=4
-        )
-        self._minute_spinbox.pack(side="left", padx=(2, 0))
+        ttk.Separator(tab, orient="horizontal").pack(fill="x", pady=12)
 
-    def _build_save_row(self) -> None:
-        ttk.Button(self, text="Save Configuration", command=self._save).pack(pady=(4, 0))
+        # --- Podcast length ---
+        ttk.Label(tab, text="Podcast length:").pack(anchor="w", pady=(0, 8))
+
+        self._duration_options = [
+            ("~1 minute  (quick headlines)",  60),
+            ("~5 minutes  (brief overview)",  300),
+            ("~10 minutes  (standard)",       600),
+            ("~15 minutes  (extended)",       900),
+            ("~30 minutes  (deep dive)",      1800),
+            ("~60 minutes  (full edition)",   3600),
+        ]
+        self._duration_var = tk.IntVar(value=600)
+
+        for label, seconds in self._duration_options:
+            ttk.Radiobutton(
+                tab,
+                text=label,
+                variable=self._duration_var,
+                value=seconds,
+            ).pack(anchor="w", pady=2)
 
     # ------------------------------------------------------------------
-    # Populate / refresh
+    # Populate from config
     # ------------------------------------------------------------------
 
     def _populate_from_config(self) -> None:
-        """Fill all widgets from self._config."""
-        # Sources listbox
-        self._sources_listbox.delete(0, tk.END)
-        for source in self._config.sources:
-            self._sources_listbox.insert(tk.END, f"{source.name} — {source.url}")
-        self._refresh_onboarding()
+        # Sources
+        self._populate_sources()
 
         # Topics
-        self._topics_text.delete("1.0", tk.END)
-        self._topics_text.insert("1.0", "\n".join(self._config.filter.topics))
+        active_topics = set(self._config.filter.topics)
+        for topic, var in self._topic_vars.items():
+            var.set(topic in active_topics)
 
-        # Keywords
-        self._keywords_text.delete("1.0", tk.END)
-        self._keywords_text.insert("1.0", "\n".join(self._config.filter.keywords))
+        # Keywords — split into preset vs custom
+        preset_set = set(AVAILABLE_KEYWORDS)
+        active_keywords = set(self._config.filter.keywords)
+        self._custom_keywords = [k for k in self._config.filter.keywords if k not in preset_set]
+        self._populate_keywords()
+        for kw, var in self._keyword_vars.items():
+            var.set(kw in active_keywords)
 
         # Schedule
         self._hour_var.set(self._config.scheduler.generation_hour)
         self._minute_var.set(self._config.scheduler.generation_minute)
-
-    def _refresh_onboarding(self) -> None:
-        if self._sources_listbox.size() == 0:
-            self._onboarding_label.pack(pady=(4, 0))
-        else:
-            self._onboarding_label.pack_forget()
+        self._duration_var.set(self._config.max_duration_seconds)
 
     # ------------------------------------------------------------------
-    # Source CRUD
-    # ------------------------------------------------------------------
-
-    def _add_source(self) -> None:
-        dialog = _SourceDialog(self, title="Add Source")
-        if dialog.result is not None:
-            self._config.sources.append(dialog.result)
-            self._sources_listbox.insert(tk.END, f"{dialog.result.name} — {dialog.result.url}")
-            self._refresh_onboarding()
-
-    def _edit_source(self) -> None:
-        selection = self._sources_listbox.curselection()
-        if not selection:
-            messagebox.showinfo("Edit Source", "Please select a source to edit.", parent=self)
-            return
-        idx = selection[0]
-        existing = self._config.sources[idx]
-        dialog = _SourceDialog(self, title="Edit Source", source=existing)
-        if dialog.result is not None:
-            self._config.sources[idx] = dialog.result
-            self._sources_listbox.delete(idx)
-            self._sources_listbox.insert(idx, f"{dialog.result.name} — {dialog.result.url}")
-            self._sources_listbox.selection_set(idx)
-
-    def _remove_source(self) -> None:
-        selection = self._sources_listbox.curselection()
-        if not selection:
-            messagebox.showinfo("Remove Source", "Please select a source to remove.", parent=self)
-            return
-        idx = selection[0]
-        self._config.sources.pop(idx)
-        self._sources_listbox.delete(idx)
-        self._refresh_onboarding()
-
-    # ------------------------------------------------------------------
-    # Save
+    # Collect & save
     # ------------------------------------------------------------------
 
     def _collect_config(self) -> AppConfig:
-        """Read widget values back into an AppConfig."""
-        topics = [
-            line.strip()
-            for line in self._topics_text.get("1.0", tk.END).splitlines()
-            if line.strip()
-        ]
-        keywords = [
-            line.strip()
-            for line in self._keywords_text.get("1.0", tk.END).splitlines()
-            if line.strip()
-        ]
+        # Sources: update enabled flags
+        source_enabled = {name: var.get() for name, var in self._source_vars.items()}
+        for source in self._config.sources:
+            source.enabled = source_enabled.get(source.name, source.enabled)
+
+        topics = [t for t, v in self._topic_vars.items() if v.get()]
+        keywords = [k for k, v in self._keyword_vars.items() if v.get()]
+
         try:
             hour = int(self._hour_var.get())
             minute = int(self._minute_var.get())
@@ -259,20 +421,13 @@ class ConfigPanel(ttk.Frame):
 
         return AppConfig(
             sources=list(self._config.sources),
-            filter=FilterConfig(topics=topics, keywords=keywords),
+            filter=FilterConfig(topics=topics, keywords=keywords, relevance_threshold=0.05),
             scheduler=SchedulerConfig(generation_hour=hour, generation_minute=minute),
+            max_duration_seconds=self._duration_var.get(),
         )
 
     def _save(self) -> None:
         self._config = self._collect_config()
-        # If user removed all sources, restore the built-in defaults
-        if not self._config.sources:
-            from .config_store import _default_config
-            self._config.sources = list(_default_config().sources)
-            self._sources_listbox.delete(0, tk.END)
-            for source in self._config.sources:
-                self._sources_listbox.insert(tk.END, f"{source.name} — {source.url}")
-            self._refresh_onboarding()
         try:
             self._config_store.save(self._config)
             logger.info("Configuration saved.")
@@ -287,12 +442,7 @@ class ConfigPanel(ttk.Frame):
             except Exception as exc:
                 logger.error("on_config_saved callback raised: %s", exc)
 
-    # ------------------------------------------------------------------
-    # Public helpers
-    # ------------------------------------------------------------------
-
     def get_config(self) -> AppConfig:
-        """Return the most recently saved AppConfig."""
         return self._config
 
 
@@ -301,12 +451,15 @@ class ConfigPanel(ttk.Frame):
 # ---------------------------------------------------------------------------
 
 class PlaybackPanel(ttk.Frame):
-    """Right panel: status, progress, and playback controls."""
+    """Right panel: status, progress, story list, and playback controls."""
 
-    def __init__(self, parent: tk.Widget, player, root: tk.Tk) -> None:
+    def __init__(self, parent: tk.Widget, player, root: tk.Tk, on_generate=None) -> None:
         super().__init__(parent, padding=8)
         self._player = player
         self._root = root
+        self._on_generate = on_generate
+        self._episode = None          # current Episode object
+        self._last_segment_index = -1 # track highlight changes
 
         self._build_ui()
         self._schedule_update()
@@ -321,15 +474,60 @@ class PlaybackPanel(ttk.Frame):
 
         # Status label
         self._status_var = tk.StringVar(value="No episode available")
-        self._status_label = ttk.Label(
+        ttk.Label(
             playback_lf, textvariable=self._status_var, font=("TkDefaultFont", 10, "bold")
-        )
-        self._status_label.pack(pady=(0, 6))
+        ).pack(pady=(0, 4))
 
-        # Progress label
+        # Duration label  (e.g. "4 stories · 3m 42s total")
+        self._duration_var = tk.StringVar(value="")
+        ttk.Label(playback_lf, textvariable=self._duration_var, foreground="gray").pack(pady=(0, 8))
+
+        # Story list
+        stories_lf = ttk.LabelFrame(playback_lf, text="Stories — double-click to jump", padding=4)
+        stories_lf.pack(fill="both", expand=True, pady=(0, 8))
+
+        list_frame = ttk.Frame(stories_lf)
+        list_frame.pack(fill="both", expand=True)
+
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical")
+        self._story_listbox = tk.Listbox(
+            list_frame,
+            height=6,
+            yscrollcommand=scrollbar.set,
+            selectmode="single",
+            activestyle="none",
+            font=("TkDefaultFont", 9),
+        )
+        scrollbar.config(command=self._story_listbox.yview)
+        self._story_listbox.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        self._story_listbox.bind("<Double-Button-1>", self._on_story_double_click)
+        self._story_listbox.bind("<<ListboxSelect>>", self._on_story_select)
+
+        # Story description box
+        desc_lf = ttk.LabelFrame(playback_lf, text="Story Description", padding=6)
+        desc_lf.pack(fill="x", pady=(0, 8))
+
+        self._desc_text = tk.Text(
+            desc_lf,
+            height=4,
+            wrap="word",
+            state="disabled",
+            font=("TkDefaultFont", 9),
+            relief="flat",
+        )
+        desc_sb = ttk.Scrollbar(desc_lf, orient="vertical", command=self._desc_text.yview)
+        self._desc_text.configure(yscrollcommand=desc_sb.set)
+        self._desc_text.pack(side="left", fill="both", expand=True)
+        desc_sb.pack(side="right", fill="y")
+        # Match background to the theme after the widget is realised
+        self._root.after_idle(lambda: self._desc_text.configure(
+            background=self._root.cget("background")
+        ))
+
+        # Progress label  (e.g. "Story 2 of 4 — 01:12 / 03:42")
         self._progress_var = tk.StringVar(value="")
-        self._progress_label = ttk.Label(playback_lf, textvariable=self._progress_var)
-        self._progress_label.pack(pady=(0, 12))
+        ttk.Label(playback_lf, textvariable=self._progress_var).pack(pady=(0, 8))
 
         # Playback buttons
         btn_frame = ttk.Frame(playback_lf)
@@ -344,11 +542,113 @@ class PlaybackPanel(ttk.Frame):
         self._skip_btn = ttk.Button(btn_frame, text="⏭ Skip", command=self._on_skip)
         self._skip_btn.pack(side="left", padx=4)
 
-        # Start with buttons disabled (no episode loaded)
+        # Generate Now button
+        self._generate_btn = ttk.Button(
+            playback_lf, text="🔄 Generate Now", command=self._on_generate_now
+        )
+        self._generate_btn.pack(pady=(12, 0))
+
+        # Tag for highlighting the current story
+        self._story_listbox.configure(selectbackground="#0078d7", selectforeground="white")
+
         self._set_buttons_enabled(False)
 
     # ------------------------------------------------------------------
-    # Button callbacks
+    # Story list population
+    # ------------------------------------------------------------------
+
+    def load_episode(self, episode) -> None:
+        """Populate the story list from an Episode (call from main thread or after_idle)."""
+        self._episode = episode
+        self._last_segment_index = -1
+        self._story_listbox.delete(0, tk.END)
+
+        total_ms = episode.total_duration_ms
+        total_s = total_ms // 1000
+        mm = total_s // 60
+        ss = total_s % 60
+        n = len(episode.segments)
+        self._duration_var.set(f"{n} {'story' if n == 1 else 'stories'} · {mm}m {ss:02d}s total")
+
+        for i, seg in enumerate(episode.segments):
+            seg_s = seg.duration_ms // 1000
+            label = seg.title if seg.title else f"Story {i + 1}"
+            source = f"  [{seg.source_name}]" if seg.source_name else ""
+            self._story_listbox.insert(tk.END, f"{i + 1}. {label}{source}  ({seg_s}s)")
+
+        self._highlight_story(0)
+
+    def _highlight_story(self, index: int) -> None:
+        """Select and scroll to the given story index in the listbox."""
+        if self._episode is None or index >= len(self._episode.segments):
+            return
+        self._story_listbox.selection_clear(0, tk.END)
+        self._story_listbox.selection_set(index)
+        self._story_listbox.see(index)
+        self._last_segment_index = index
+        self._show_description(index)
+
+    # ------------------------------------------------------------------
+    # Description panel
+    # ------------------------------------------------------------------
+
+    def _show_description(self, index: int) -> None:
+        """Populate the description box for the given segment index."""
+        if self._episode is None or index >= len(self._episode.segments):
+            return
+        seg = self._episode.segments[index]
+
+        # Build display text
+        lines = []
+        if seg.source_name:
+            lines.append(f"Source: {seg.source_name}")
+        dur_s = seg.duration_ms // 1000
+        lines.append(f"Duration: {dur_s}s")
+        if seg.article_url and seg.article_url not in ("intro",):
+            lines.append(f"URL: {seg.article_url}")
+        lines.append("")
+        # Prefer full summary; fall back to spoken_text
+        body = seg.summary.strip() if seg.summary.strip() else seg.spoken_text.strip()
+        if body:
+            lines.append(body)
+
+        content = "\n".join(lines)
+        self._desc_text.configure(state="normal")
+        self._desc_text.delete("1.0", tk.END)
+        self._desc_text.insert("1.0", content)
+        self._desc_text.configure(state="disabled")
+
+    # ------------------------------------------------------------------
+    # Story click handlers
+    # ------------------------------------------------------------------
+
+    def _on_story_select(self, _event) -> None:
+        """Single-click: show description without jumping playback."""
+        sel = self._story_listbox.curselection()
+        if sel:
+            self._show_description(sel[0])
+
+    def _on_story_double_click(self, _event) -> None:
+        """Double-click: jump to story and start playing."""
+        sel = self._story_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        try:
+            self._player.jump_to(idx)
+        except Exception as exc:
+            logger.error("Jump error: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Generate Now
+    # ------------------------------------------------------------------
+
+    def _on_generate_now(self) -> None:
+        if self._on_generate is not None:
+            self._on_generate()
+
+    # ------------------------------------------------------------------
+    # Playback button callbacks
     # ------------------------------------------------------------------
 
     def _on_replay(self) -> None:
@@ -382,7 +682,7 @@ class PlaybackPanel(ttk.Frame):
         self._root.after(1000, self._schedule_update)
 
     def _update_progress(self) -> None:
-        """Refresh the progress label from the player state."""
+        """Refresh progress label and story highlight from player state."""
         try:
             state = self._player.get_state()
         except Exception:
@@ -393,26 +693,38 @@ class PlaybackPanel(ttk.Frame):
             self._set_buttons_enabled(False)
             return
 
-        self._set_buttons_enabled(True)
+        self._set_buttons_enabled(not state.episode_ended)
 
+        # Elapsed / total
         elapsed_s = state.elapsed_episode_ms // 1000
-        mm = elapsed_s // 60
-        ss = elapsed_s % 60
+        e_mm, e_ss = elapsed_s // 60, elapsed_s % 60
+
+        total_ms = self._episode.total_duration_ms if self._episode else 0
+        total_s = total_ms // 1000
+        t_mm, t_ss = total_s // 60, total_s % 60
+
         story_num = min(state.current_segment_index + 1, state.total_segments)
         self._progress_var.set(
-            f"Story {story_num} of {state.total_segments} — {mm:02d}:{ss:02d} elapsed"
+            f"Story {story_num} of {state.total_segments} — "
+            f"{e_mm:02d}:{e_ss:02d} / {t_mm:02d}:{t_ss:02d}"
         )
 
-        if state.episode_ended:
-            self._set_buttons_enabled(False)
+        # Sync story list highlight
+        if state.current_segment_index != self._last_segment_index:
+            self._highlight_story(state.current_segment_index)
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def set_status(self, message: str) -> None:
-        """Update the status label text (thread-safe via after_idle)."""
+        """Update the status label (thread-safe)."""
         self._root.after_idle(lambda: self._status_var.set(message))
+
+    def set_generate_btn_enabled(self, enabled: bool) -> None:
+        """Enable or disable the Generate Now button (thread-safe)."""
+        state = "normal" if enabled else "disabled"
+        self._root.after_idle(lambda: self._generate_btn.config(state=state))
 
     def _set_buttons_enabled(self, enabled: bool) -> None:
         state = "normal" if enabled else "disabled"
@@ -440,7 +752,9 @@ class App(tk.Tk):
         self._player = player
 
         # Build panels
-        self._playback_panel = PlaybackPanel(self, player=player, root=self)
+        self._playback_panel = PlaybackPanel(
+            self, player=player, root=self, on_generate=self._run_pipeline_now
+        )
         self._config_panel = ConfigPanel(
             self,
             config_store=config_store,
@@ -455,21 +769,24 @@ class App(tk.Tk):
         scheduler.on_success = self._on_pipeline_success
         scheduler.on_failure = self._on_pipeline_failure
 
-        # Load latest episode on startup
-        self._load_latest_episode()
+        # Ensure today's episode is available on startup
+        self._ensure_todays_episode()
 
     # ------------------------------------------------------------------
     # Scheduler callbacks
     # ------------------------------------------------------------------
 
     def _on_pipeline_success(self, episode) -> None:
-        """Called by the scheduler background thread on pipeline success."""
+        """Called by the scheduler or generate thread on pipeline success."""
         self._player.load(episode)
-        self.after_idle(lambda: self._playback_panel.set_status("New episode available!"))
+        self.after_idle(lambda: self._playback_panel.load_episode(episode))
+        self.after_idle(lambda: self._playback_panel.set_status("Today's episode ready — press Play ▶"))
+        self._playback_panel.set_generate_btn_enabled(True)
 
     def _on_pipeline_failure(self, error_msg: str) -> None:
-        """Called by the scheduler background thread on pipeline failure."""
+        """Called by the scheduler or generate thread on pipeline failure."""
         self.after_idle(lambda: self._playback_panel.set_status(f"Error: {error_msg}"))
+        self._playback_panel.set_generate_btn_enabled(True)
 
     # ------------------------------------------------------------------
     # Config saved callback
@@ -486,16 +803,42 @@ class App(tk.Tk):
             logger.error("Failed to restart scheduler: %s", exc)
 
     # ------------------------------------------------------------------
-    # Startup
+    # Startup: ensure today's episode exists
     # ------------------------------------------------------------------
 
-    def _load_latest_episode(self) -> None:
-        """Load the most recent episode from the store and hand it to the player."""
+    def _ensure_todays_episode(self) -> None:
+        """Load today's episode if it exists; otherwise auto-generate it."""
         try:
             episode = self._episode_store.load_latest()
-            if episode is not None:
+            if episode is not None and episode.date == date.today():
                 self._player.load(episode)
-                self._playback_panel.set_status("New episode available!")
-                logger.info("Loaded latest episode from store: %s", episode.audio_path)
+                self._playback_panel.load_episode(episode)
+                self._playback_panel.set_status("Today's episode ready — press Play ▶")
+                logger.info("Loaded today's episode from store: %s", episode.audio_path)
+                return
         except Exception as exc:
             logger.error("Failed to load latest episode: %s", exc)
+
+        # No episode for today — generate one automatically
+        logger.info("No episode for today — generating automatically.")
+        self._run_pipeline_now()
+
+    # ------------------------------------------------------------------
+    # Generate Now (runs pipeline in a background thread)
+    # ------------------------------------------------------------------
+
+    def _run_pipeline_now(self) -> None:
+        """Kick off the pipeline in a background thread."""
+        self._playback_panel.set_status("Generating today's episode…")
+        self._playback_panel.set_generate_btn_enabled(False)
+
+        def _worker():
+            try:
+                episode = self._pipeline.run()
+                logger.info("Pipeline completed: %s", episode.audio_path)
+                self._on_pipeline_success(episode)
+            except Exception as exc:
+                logger.error("Pipeline failed: %s", exc)
+                self._on_pipeline_failure(str(exc))
+
+        threading.Thread(target=_worker, daemon=True).start()

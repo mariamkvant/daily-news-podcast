@@ -63,7 +63,10 @@ class Pipeline:
         logger.info("Generated %d audio segments.", len(segments))
 
         # 5. Compile segments into an episode
-        episode = self.compiler.compile(segments, date.today(), self.tts_engine, self.audio_dir)
+        episode = self.compiler.compile(
+            segments, date.today(), self.tts_engine, self.audio_dir,
+            max_duration_seconds=config.max_duration_seconds,
+        )
 
         # 6. Raise if no segments were produced
         if len(episode.segments) == 0:

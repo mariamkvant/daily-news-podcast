@@ -1,10 +1,39 @@
 # TTSEngine: converts article text to MP3 audio segments via gTTS / pyttsx3.
 import logging
+import os
 from pathlib import Path
 
 from daily_news_podcast.models import Article, Segment
 
 logger = logging.getLogger(__name__)
+
+
+def _configure_pydub_ffmpeg() -> None:
+    """Point pydub at the ffmpeg/ffprobe binaries, searching winget install location if needed."""
+    import pydub.utils as pydub_utils
+    from pydub import AudioSegment
+
+    winget_base = Path.home() / "AppData/Local/Microsoft/WinGet/Packages"
+    ffmpeg_bin: Path | None = None
+    for candidate in winget_base.glob("Gyan.FFmpeg*/*/bin"):
+        if (candidate / "ffmpeg.exe").exists():
+            ffmpeg_bin = candidate
+            break
+
+    if ffmpeg_bin:
+        ffmpeg_path = str(ffmpeg_bin / "ffmpeg.exe")
+        ffprobe_path = str(ffmpeg_bin / "ffprobe.exe")
+        # Set on the class directly (used by from_file/from_mp3)
+        AudioSegment.converter = ffmpeg_path
+        # Patch the utils lookup functions as well
+        pydub_utils.get_encoder_name = lambda: ffmpeg_path
+        pydub_utils.get_prober_name = lambda: ffprobe_path
+        logger.info("Configured pydub to use ffmpeg at: %s", ffmpeg_path)
+    else:
+        logger.warning("ffmpeg not found in winget packages; pydub will rely on PATH.")
+
+
+_configure_pydub_ffmpeg()
 
 
 class TTSEngine:
@@ -74,4 +103,8 @@ class TTSEngine:
             article_url=article.url,
             audio_path=str(audio_path),
             duration_ms=duration_ms,
+            title=article.title,
+            source_name=article.source_name,
+            spoken_text=full_text,
+            summary=article.summary,
         )

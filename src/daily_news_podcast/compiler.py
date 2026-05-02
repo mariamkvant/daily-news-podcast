@@ -4,8 +4,11 @@ from datetime import date, datetime
 from pathlib import Path
 
 from daily_news_podcast.models import Article, Episode, Segment
+from daily_news_podcast.tts_engine import _configure_pydub_ffmpeg
 
 logger = logging.getLogger(__name__)
+
+_configure_pydub_ffmpeg()
 
 
 class Compiler:

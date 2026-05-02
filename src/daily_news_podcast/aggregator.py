@@ -20,6 +20,8 @@ class Aggregator:
         seen_urls: set[str] = set()
 
         for source in sources:
+            if not source.enabled:
+                continue
             try:
                 feed = feedparser.parse(source.url)
 

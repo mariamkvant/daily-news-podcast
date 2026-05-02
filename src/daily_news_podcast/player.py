@@ -84,7 +84,22 @@ class Player:
             if self._current_segment_index >= len(self._episode.segments):
                 self._episode_ended = True
                 return
-            # Play the next segment (outside the lock to avoid deadlock with poll thread)
+            should_play = True
+
+        if should_play:
+            self.play()
+
+    def jump_to(self, index: int) -> None:
+        """Jump directly to a specific segment by index and start playing."""
+        with self._lock:
+            if self._episode is None:
+                return
+            if index < 0 or index >= len(self._episode.segments):
+                return
+            pygame.mixer.music.stop()
+            self._current_segment_index = index
+            self._position_ms = 0
+            self._episode_ended = False
             should_play = True
 
         if should_play:

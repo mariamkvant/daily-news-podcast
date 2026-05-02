@@ -1,0 +1,67 @@
+import logging
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+from .aggregator import Article
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Segment:
+    article_url: str
+    audio_path: str
+    duration_ms: int
+    title: str = ""
+    source_name: str = ""
+    spoken_text: str = ""
+    summary: str = ""
+
+
+def _truncate(text: str, max_words: int = 75) -> str:
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    last = -1
+    for i in range(max_words):
+        if words[i].endswith((".", "!", "?")):
+            last = i
+    return " ".join(words[: last + 1] if last >= 0 else words[:max_words])
+
+
+def generate_segment(article: Article, audio_dir: Path) -> Segment | None:
+    full_text = article.title + ". " + _truncate(article.summary)
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"segment_{abs(hash(article.url))}.mp3"
+    audio_path = audio_dir / filename
+
+    # Try gTTS
+    try:
+        from gtts import gTTS
+        gTTS(text=full_text, lang="en").save(str(audio_path))
+    except Exception as e:
+        logger.error("gTTS failed for %s: %s", article.url, e)
+        return None
+
+    # Measure duration via ffprobe (available on Railway via apt)
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        duration_ms = int(float(result.stdout.strip()) * 1000)
+    except Exception as e:
+        logger.warning("ffprobe failed for %s: %s — estimating duration", article.url, e)
+        duration_ms = len(full_text.split()) * 400  # rough estimate: ~150 wpm
+
+    return Segment(
+        article_url=article.url,
+        audio_path=str(audio_path),
+        duration_ms=duration_ms,
+        title=article.title,
+        source_name=article.source_name,
+        spoken_text=full_text,
+        summary=article.summary,
+    )
