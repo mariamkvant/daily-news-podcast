@@ -62,8 +62,8 @@ def _run_generation_in_thread(user_id: int) -> None:
         )
         logger.info("User %d: filtered to %d articles", user_id, len(filtered))
 
-        # Cap at 8 articles — enough for a good episode, fast enough to generate
-        max_articles = min(len(filtered), 8)
+        # Cap at 5 articles — good balance of speed vs content
+        max_articles = min(len(filtered), 5)
         filtered = filtered[:max_articles]
 
         with tempfile.TemporaryDirectory() as tmpdir:

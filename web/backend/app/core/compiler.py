@@ -1,11 +1,10 @@
 import logging
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-from .aggregator import Article
-from .tts_engine import Segment, generate_segment
+from .tts_engine import Segment
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +29,8 @@ def compile_episode(
     audio_dir.mkdir(parents=True, exist_ok=True)
     max_ms = max_duration_seconds * 1000
 
-    # Intro
-    intro_article = Article(
-        title=f"Daily News Podcast for {episode_date}. {len(segments)} stories today.",
-        summary="", url="intro", source_name="intro", published_at=datetime.now(),
-    )
-    intro_seg = generate_segment(intro_article, audio_dir)
-
-    total_ms = intro_seg.duration_ms if intro_seg else 0
+    # Select segments within duration budget (no intro — saves 1 TTS call)
+    total_ms = 0
     selected: list[Segment] = []
     for seg in segments:
         if total_ms + seg.duration_ms > max_ms:
@@ -45,15 +38,10 @@ def compile_episode(
         selected.append(seg)
         total_ms += seg.duration_ms
 
-    # Concatenate with ffmpeg (available on Railway)
+    # Concatenate with ffmpeg
     episode_path = audio_dir / f"episode_{episode_date.isoformat()}.mp3"
-    parts = []
-    if intro_seg:
-        parts.append(intro_seg.audio_path)
-    parts.extend(s.audio_path for s in selected)
-
-    if parts:
-        _concat_mp3(parts, str(episode_path))
+    if selected:
+        _concat_mp3([s.audio_path for s in selected], str(episode_path))
 
     # Build episode summary
     titles = [s.title for s in selected]
