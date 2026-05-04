@@ -46,3 +46,18 @@ if not os.environ.get("AWS_BUCKET_NAME"):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/db-check")
+def db_check():
+    """Debug endpoint — check DB connectivity and table existence."""
+    try:
+        from .database import engine
+        from sqlalchemy import text, inspect
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        return {"db": "connected", "tables": tables}
+    except Exception as e:
+        return {"db": "error", "detail": str(e)}
