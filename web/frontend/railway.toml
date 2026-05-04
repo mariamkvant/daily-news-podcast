@@ -2,6 +2,6 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "npx serve -s dist -l $PORT"
+startCommand = "node node_modules/.bin/serve -s dist -l $PORT"
 healthcheckPath = "/"
 healthcheckTimeout = 60
