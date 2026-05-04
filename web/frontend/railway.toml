@@ -1,7 +1,8 @@
 [build]
-builder = "nixpacks"
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+buildArgs = { VITE_API_URL = "$VITE_API_URL" }
 
 [deploy]
-startCommand = "node node_modules/.bin/serve -s dist -l $PORT"
 healthcheckPath = "/"
 healthcheckTimeout = 60
