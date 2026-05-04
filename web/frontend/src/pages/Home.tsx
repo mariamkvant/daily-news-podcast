@@ -48,6 +48,7 @@ export default function Home() {
 
   function startPolling() {
     if (pollRef.current) return
+    const startTime = Date.now()
     pollRef.current = setInterval(async () => {
       const { data } = await api.get<Episode>('/episodes/today')
       setEpisode(data)
@@ -55,6 +56,14 @@ export default function Home() {
         setGenerating(false)
         clearInterval(pollRef.current!)
         pollRef.current = null
+      }
+      // Auto-cancel if stuck generating for more than 3 minutes
+      if (data.status === 'generating' && Date.now() - startTime > 180000) {
+        try { await api.post('/episodes/cancel') } catch {}
+        setGenerating(false)
+        clearInterval(pollRef.current!)
+        pollRef.current = null
+        loadEpisode()
       }
     }, 4000)
   }
@@ -146,10 +155,9 @@ export default function Home() {
                 <p className="text-white font-medium">Generating your episode…</p>
                 <p className="text-gray-400 text-sm mt-2">Fetching and converting stories</p>
                 <button onClick={async () => {
-                  try {
-                    await api.post('/episodes/cancel')
-                  } catch {}
+                  try { await api.post('/episodes/cancel') } catch {}
                   setGenerating(false)
+                  if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
                   await loadEpisode()
                 }} className="mt-6 text-xs text-gray-600 hover:text-gray-400 transition underline">
                   Taking too long? Cancel
