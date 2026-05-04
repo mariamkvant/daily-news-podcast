@@ -122,15 +122,10 @@ def _run_generation_in_thread(user_id: int) -> None:
 
 
 def _trigger_generation(user_id: int) -> None:
-    """Try Celery first, fall back to background thread."""
-    try:
-        from ..tasks import generate_episode_task
-        generate_episode_task.delay(user_id)
-        logger.info("Queued Celery task for user %d", user_id)
-    except Exception as e:
-        logger.warning("Celery unavailable (%s), running in background thread", e)
-        t = threading.Thread(target=_run_generation_in_thread, args=(user_id,), daemon=True)
-        t.start()
+    """Always run generation in a background thread (no Celery worker deployed)."""
+    t = threading.Thread(target=_run_generation_in_thread, args=(user_id,), daemon=True)
+    t.start()
+    logger.info("Started background generation thread for user %d", user_id)
 
 
 @router.get("/today", response_model=EpisodeResponse)
