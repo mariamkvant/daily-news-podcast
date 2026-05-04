@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Mic } from 'lucide-react'
+import { Mic, Mail } from 'lucide-react'
 import api from '../api'
 import { useAuthStore } from '../store'
 
@@ -12,21 +12,51 @@ export default function Register() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [registered, setRegistered] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError('')
     if (password.length < 8) { setError('Password must be at least 8 characters'); return }
+    if (password.length > 72) { setError('Password must be 72 characters or fewer'); return }
     setLoading(true)
     try {
       const { data } = await api.post('/auth/register', { name, email, password })
       setToken(data.access_token)
-      navigate('/onboarding')
+      setRegistered(true)
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Registration failed')
     } finally {
       setLoading(false)
     }
+  }
+
+  if (registered) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-950 px-4">
+        <div className="w-full max-w-md text-center">
+          <div className="flex items-center justify-center gap-2 mb-8 text-2xl font-bold text-white">
+            <Mic className="text-brand-500" size={28} />
+            Daily News Podcast
+          </div>
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-10">
+            <Mail className="text-brand-500 mx-auto mb-4" size={40} />
+            <h2 className="text-white font-bold text-xl mb-3">Check your email</h2>
+            <p className="text-gray-400 leading-relaxed">
+              We sent a verification link to <span className="text-white font-medium">{email}</span>.
+              Click it to activate your account and start listening.
+            </p>
+            <p className="text-gray-600 text-sm mt-6">
+              Didn't get it?{' '}
+              <button onClick={() => api.post(`/auth/resend-verification?email=${encodeURIComponent(email)}`)}
+                className="text-brand-500 hover:text-brand-400">
+                Resend
+              </button>
+            </p>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (
