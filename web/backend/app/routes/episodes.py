@@ -69,9 +69,9 @@ def _run_generation_in_thread(user_id: int) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             audio_dir = Path(tmpdir)
 
-            # Generate TTS segments in parallel (4 workers)
+            # Generate TTS segments in parallel (6 workers)
             segments_map: dict[int, object] = {}
-            with ThreadPoolExecutor(max_workers=4) as executor:
+            with ThreadPoolExecutor(max_workers=6) as executor:
                 futures = {
                     executor.submit(generate_segment, article, audio_dir): i
                     for i, article in enumerate(filtered)
@@ -198,6 +198,24 @@ def generate_now(
 
     _trigger_generation(current_user.id)
     return {"detail": "Generation started"}
+
+
+@router.post("/cancel")
+def cancel_generation(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Cancel a stuck generating episode for the current user."""
+    today = date.today()
+    episode = db.query(models.Episode).filter(
+        models.Episode.user_id == current_user.id,
+        models.Episode.date == today,
+    ).first()
+    if episode and episode.status in ("generating", "pending"):
+        episode.status = "failed"
+        db.commit()
+        return {"detail": "Cancelled"}
+    return {"detail": "Nothing to cancel"}
 
 
 @router.get("/", response_model=list[EpisodeResponse])

@@ -146,9 +146,11 @@ export default function Home() {
                 <p className="text-white font-medium">Generating your episode…</p>
                 <p className="text-gray-400 text-sm mt-2">Fetching and converting stories</p>
                 <button onClick={async () => {
-                  await fetch(`${import.meta.env.VITE_API_URL || ''}/reset-stuck`, { method: 'GET' })
+                  try {
+                    await api.post('/episodes/cancel')
+                  } catch {}
                   setGenerating(false)
-                  loadEpisode()
+                  await loadEpisode()
                 }} className="mt-6 text-xs text-gray-600 hover:text-gray-400 transition underline">
                   Taking too long? Cancel
                 </button>
