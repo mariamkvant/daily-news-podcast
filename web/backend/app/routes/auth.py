@@ -85,10 +85,16 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         if not user or not verify_password(body.password, user.hashed_pw):
             raise HTTPException(status_code=401, detail="Invalid email or password")
         if not user.is_verified:
-            raise HTTPException(
-                status_code=403,
-                detail="Please verify your email before logging in. Check your inbox."
-            )
+            # If RESEND is not configured, auto-verify
+            import os
+            if not os.environ.get("RESEND_API_KEY"):
+                user.is_verified = True
+                db.commit()
+            else:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Please verify your email before logging in. Check your inbox."
+                )
         return TokenResponse(access_token=create_access_token(user.id))
     except HTTPException:
         raise
