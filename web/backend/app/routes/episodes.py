@@ -62,33 +62,23 @@ def _run_generation_in_thread(user_id: int) -> None:
         )
         logger.info("User %d: filtered to %d articles", user_id, len(filtered))
 
-        # Cap at 5 articles — good balance of speed vs content
-        max_articles = min(len(filtered), 5)
-        filtered = filtered[:max_articles]
+        # Cap at 3 articles — fast and reliable
+        filtered = filtered[:3]
 
         with tempfile.TemporaryDirectory() as tmpdir:
             audio_dir = Path(tmpdir)
 
-            # Generate TTS segments in parallel (6 workers)
-            # Use a lock to prevent race conditions on the temp directory
-            segments_map: dict[int, object] = {}
-            lock = threading.Lock()
-
-            def _gen_segment(idx_article):
-                idx, article = idx_article
+            # Generate TTS segments sequentially — parallel was causing deadlocks
+            segments = []
+            for article in filtered:
                 try:
                     seg = generate_segment(article, audio_dir)
                     if seg:
-                        with lock:
-                            segments_map[idx] = seg
+                        segments.append(seg)
+                        logger.info("User %d: segment ok — %s", user_id, article.title[:50])
                 except Exception as e:
-                    logger.warning("User %d: TTS failed for article %d: %s", user_id, idx, e)
+                    logger.warning("User %d: TTS failed: %s", user_id, e)
 
-            with ThreadPoolExecutor(max_workers=6) as executor:
-                list(executor.map(_gen_segment, enumerate(filtered)))
-
-            # Restore original order
-            segments = [segments_map[i] for i in sorted(segments_map.keys())]
             logger.info("User %d: generated %d/%d segments", user_id, len(segments), len(filtered))
 
             if not segments:
