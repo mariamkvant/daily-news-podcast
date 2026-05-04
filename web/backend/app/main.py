@@ -70,19 +70,41 @@ def run_migrations():
         migrations = [
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS verify_token VARCHAR(255)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS verify_token_expires TIMESTAMP",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token VARCHAR(255)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMP",
             "UPDATE users SET is_verified = TRUE WHERE is_verified IS NULL OR is_verified = FALSE",
         ]
         with engine.connect() as conn:
             for sql in migrations:
                 try:
                     conn.execute(text(sql))
-                    results.append({"sql": sql[:50], "status": "ok"})
+                    results.append({"sql": sql[:60], "status": "ok"})
                 except Exception as e:
-                    results.append({"sql": sql[:50], "status": str(e)})
+                    results.append({"sql": sql[:60], "status": str(e)})
             conn.commit()
         return {"status": "done", "results": results}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
+
+
+@app.post("/reset-stuck-episodes")
+def reset_stuck_episodes():
+    """Reset stuck pending/generating episodes to failed so they regenerate on next visit."""
+    try:
+        from .database import engine
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "UPDATE episodes SET status='failed' "
+                "WHERE status IN ('pending','generating') "
+                "RETURNING id, user_id, status"
+            ))
+            rows = [dict(r._mapping) for r in result]
+            conn.commit()
+        return {"reset": len(rows), "episodes": rows}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 def _init_db():
