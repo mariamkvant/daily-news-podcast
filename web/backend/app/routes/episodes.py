@@ -169,13 +169,8 @@ def get_today(
         db.refresh(episode)
         _trigger_generation(current_user.id)
 
-    elif episode.status == "failed":
-        episode.status = "pending"
-        db.commit()
-        _trigger_generation(current_user.id)
-
-    # Note: do NOT re-trigger if status is "pending" or "generating"
-    # — a thread is already running or will be picked up
+    # For failed/pending/generating — just return the status.
+    # User must explicitly call POST /generate to retry.
 
     return episode
 
