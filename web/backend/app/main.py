@@ -88,8 +88,48 @@ def run_migrations():
         return {"status": "error", "detail": str(e)}
 
 
-@app.post("/reset-stuck-episodes")
-def reset_stuck_episodes():
+@app.get("/test-generation")
+def test_generation():
+    """Test the generation pipeline step by step."""
+    import tempfile
+    from datetime import datetime, timedelta
+    from pathlib import Path
+    results = {}
+    try:
+        # Step 1: fetch articles
+        from .core.aggregator import fetch_articles
+        from .core.catalog import ALL_SOURCES
+        since = datetime.now() - timedelta(hours=24)
+        sources = [(name, url) for name, url, _ in ALL_SOURCES[:3]]
+        articles = fetch_articles(sources, since)
+        results["articles_fetched"] = len(articles)
+
+        # Step 2: filter
+        from .core.filter import score_and_select
+        filtered = score_and_select(articles, topics=["world", "technology"], keywords=[])
+        results["articles_filtered"] = len(filtered)
+
+        if not filtered:
+            return {"status": "no_articles", **results}
+
+        # Step 3: TTS one segment
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from .core.tts_engine import generate_segment
+            seg = generate_segment(filtered[0], Path(tmpdir))
+            results["tts_ok"] = seg is not None
+            if seg:
+                results["segment_duration_ms"] = seg.duration_ms
+                results["audio_path_exists"] = Path(seg.audio_path).exists()
+
+                # Step 4: upload
+                from .storage import upload_audio
+                url = upload_audio(seg.audio_path, f"test/test_segment.mp3")
+                results["upload_url"] = url
+
+        return {"status": "ok", **results}
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "trace": traceback.format_exc(), **results}
     """Reset stuck pending/generating episodes to failed so they regenerate on next visit."""
     try:
         from .database import engine
