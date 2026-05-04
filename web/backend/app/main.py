@@ -123,6 +123,64 @@ def test_generation():
         return {"status": "error", "error": str(e), "trace": traceback.format_exc(), **results}
 
 
+@app.get("/test-full-generation")
+def test_full_generation():
+    """Run full episode generation for user 1 synchronously and return result."""
+    import traceback
+    try:
+        from .routes.episodes import _run_generation_in_thread
+        import threading
+        errors = []
+        done = threading.Event()
+
+        original = _run_generation_in_thread.__code__
+
+        # Just call it directly in this thread
+        from .database import SessionLocal
+        from . import models
+        from datetime import date, datetime, timedelta
+        import tempfile
+        from pathlib import Path
+        from .core.aggregator import fetch_articles
+        from .core.filter import score_and_select
+        from .core.tts_engine import generate_segment
+        from .core.compiler import compile_episode
+        from .core.catalog import ALL_SOURCES
+        from .storage import upload_audio
+
+        db = SessionLocal()
+        user = db.query(models.User).filter(models.User.id == 1).first()
+        if not user:
+            return {"error": "user 1 not found"}
+
+        sources = [(name, url) for name, url, _ in ALL_SOURCES if name in set(user.enabled_sources or [])]
+        if not sources:
+            sources = [(name, url) for name, url, _ in ALL_SOURCES[:6]]
+
+        since = datetime.now() - timedelta(hours=24)
+        articles = fetch_articles(sources, since)
+        filtered = score_and_select(articles, topics=user.topics or [], keywords=user.keywords or [])
+        filtered = filtered[:3]  # just 3 for speed
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_dir = Path(tmpdir)
+            segments = []
+            for i, article in enumerate(filtered):
+                try:
+                    seg = generate_segment(article, audio_dir)
+                    if seg:
+                        segments.append({"title": seg.title, "duration_ms": seg.duration_ms})
+                except Exception as e:
+                    errors.append(f"TTS {i}: {e}")
+
+            if not segments:
+                return {"error": "no segments", "tts_errors": errors}
+
+            return {"status": "ok", "segments": segments, "errors": errors}
+    except Exception as e:
+        return {"error": str(e), "trace": traceback.format_exc()}
+
+
 @app.get("/reset-stuck")
 @app.post("/reset-stuck-episodes")
 def reset_stuck_episodes():
