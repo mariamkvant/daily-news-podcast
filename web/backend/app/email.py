@@ -97,3 +97,48 @@ def send_welcome_email(to_email: str, name: str) -> None:
         })
     except Exception as e:
         logger.error("Failed to send welcome email: %s", e)
+
+
+def send_password_reset_email(to_email: str, name: str, token: str) -> None:
+    """Send password reset link."""
+    if not RESEND_API_KEY:
+        logger.warning("RESEND_API_KEY not set — skipping password reset email.")
+        return
+
+    reset_url = f"{FRONTEND_URL}/reset-password?token={token}"
+
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <body style="font-family: -apple-system, sans-serif; background: #0a0a0a; color: #fff; padding: 40px;">
+      <div style="max-width: 480px; margin: 0 auto; background: #111; border-radius: 16px; padding: 40px; border: 1px solid #222;">
+        <h1 style="color: #4f6ef7; margin-bottom: 8px;">🎙 Daily News Podcast</h1>
+        <h2 style="color: #fff; font-weight: 600;">Reset your password</h2>
+        <p style="color: #aaa; line-height: 1.6;">
+          Hi {name}, we received a request to reset your password. Click the button below to set a new one.
+        </p>
+        <a href="{reset_url}"
+           style="display: inline-block; background: #4f6ef7; color: #fff; padding: 14px 28px;
+                  border-radius: 10px; text-decoration: none; font-weight: 600; margin: 24px 0;">
+          Reset password
+        </a>
+        <p style="color: #555; font-size: 12px; margin-top: 32px;">
+          This link expires in 1 hour. If you didn't request a reset, ignore this email.
+        </p>
+      </div>
+    </body>
+    </html>
+    """
+
+    try:
+        import resend
+        resend.api_key = RESEND_API_KEY
+        resend.Emails.send({
+            "from": FROM_EMAIL,
+            "to": to_email,
+            "subject": "Reset your Daily News Podcast password",
+            "html": html,
+        })
+        logger.info("Password reset email sent to %s", to_email)
+    except Exception as e:
+        logger.error("Failed to send password reset email to %s: %s", to_email, e)

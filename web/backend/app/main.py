@@ -12,9 +12,18 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Daily News Podcast API", version="1.0.0")
 
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+ALLOWED_ORIGINS = [
+    FRONTEND_URL,
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "https://dailypodcast.live",
+    "https://www.dailypodcast.live",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -93,6 +102,9 @@ def _init_db():
                 migrations = [
                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE",
                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS verify_token VARCHAR(255)",
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS verify_token_expires TIMESTAMP",
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token VARCHAR(255)",
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMP",
                     # Set existing users as verified so they can still log in
                     "UPDATE users SET is_verified = TRUE WHERE is_verified IS NULL OR is_verified = FALSE",
                 ]

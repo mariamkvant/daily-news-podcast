@@ -18,6 +18,9 @@ class User(Base):
     is_active     = Column(Boolean, default=True)
     is_verified   = Column(Boolean, default=False)
     verify_token  = Column(String(255), nullable=True)
+    verify_token_expires = Column(DateTime, nullable=True)
+    reset_token   = Column(String(255), nullable=True)
+    reset_token_expires  = Column(DateTime, nullable=True)
 
     # Preferences
     topics              = Column(JSON, default=list)   # ["world", "technology", ...]

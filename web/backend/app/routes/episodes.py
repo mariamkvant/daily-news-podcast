@@ -1,48 +1,166 @@
+import logging
+import threading
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 
-from ..database import get_db
+from ..database import get_db, SessionLocal
 from .. import models
 from ..auth import get_current_user
 from ..schemas import EpisodeResponse
-from ..tasks import generate_episode_task
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/episodes", tags=["episodes"])
+
+
+def _run_generation_in_thread(user_id: int) -> None:
+    """Run episode generation directly in a background thread (no Celery needed)."""
+    import tempfile
+    from datetime import datetime, timedelta
+    from pathlib import Path
+    from ..core.aggregator import fetch_articles
+    from ..core.filter import score_and_select
+    from ..core.tts_engine import generate_segment
+    from ..core.compiler import compile_episode
+    from ..core.catalog import ALL_SOURCES
+    from ..storage import upload_audio
+
+    db = SessionLocal()
+    episode_row = None
+    try:
+        user = db.query(models.User).filter(models.User.id == user_id).first()
+        if not user:
+            return
+
+        today = date.today()
+        episode_row = db.query(models.Episode).filter(
+            models.Episode.user_id == user_id,
+            models.Episode.date == today,
+        ).first()
+        if episode_row is None:
+            episode_row = models.Episode(user_id=user_id, date=today, audio_url="", status="generating")
+            db.add(episode_row)
+        else:
+            episode_row.status = "generating"
+        db.commit()
+        db.refresh(episode_row)
+
+        enabled = set(user.enabled_sources or [])
+        sources = [(name, url) for name, url, _ in ALL_SOURCES if name in enabled]
+        if not sources:
+            sources = [(name, url) for name, url, _ in ALL_SOURCES[:6]]
+
+        since = datetime.now() - timedelta(hours=24)
+        articles = fetch_articles(sources, since)
+        logger.info("User %d: fetched %d articles", user_id, len(articles))
+
+        filtered = score_and_select(
+            articles,
+            topics=user.topics or [],
+            keywords=user.keywords or [],
+        )
+        logger.info("User %d: filtered to %d articles", user_id, len(filtered))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_dir = Path(tmpdir)
+            segments = []
+            for article in filtered:
+                seg = generate_segment(article, audio_dir)
+                if seg:
+                    segments.append(seg)
+            logger.info("User %d: generated %d segments", user_id, len(segments))
+
+            if not segments:
+                episode_row.status = "failed"
+                db.commit()
+                logger.error("User %d: no segments generated", user_id)
+                return
+
+            episode = compile_episode(
+                segments, today, audio_dir,
+                max_duration_seconds=user.max_duration_sec or 600,
+            )
+
+            ep_key = f"users/{user_id}/episodes/{today.isoformat()}.mp3"
+            ep_url = upload_audio(episode.audio_path, ep_key)
+
+            episode_row.audio_url = ep_url
+            episode_row.total_duration_ms = episode.total_duration_ms
+            episode_row.summary = episode.summary
+            episode_row.status = "ready"
+
+            db.query(models.Segment).filter(models.Segment.episode_id == episode_row.id).delete()
+
+            for pos, seg in enumerate(episode.segments):
+                seg_key = f"users/{user_id}/segments/{today.isoformat()}_{pos}.mp3"
+                seg_url = upload_audio(seg.audio_path, seg_key)
+                db.add(models.Segment(
+                    episode_id=episode_row.id,
+                    position=pos,
+                    article_url=seg.article_url,
+                    audio_url=seg_url,
+                    duration_ms=seg.duration_ms,
+                    title=seg.title,
+                    source_name=seg.source_name,
+                    summary=seg.summary,
+                    spoken_text=seg.spoken_text,
+                ))
+
+            db.commit()
+            logger.info("User %d: episode ready at %s", user_id, ep_url)
+
+    except Exception as exc:
+        logger.exception("Episode generation failed for user %d: %s", user_id, exc)
+        if episode_row:
+            try:
+                episode_row.status = "failed"
+                db.commit()
+            except Exception:
+                pass
+    finally:
+        db.close()
+
+
+def _trigger_generation(user_id: int) -> None:
+    """Try Celery first, fall back to background thread."""
+    try:
+        from ..tasks import generate_episode_task
+        generate_episode_task.delay(user_id)
+        logger.info("Queued Celery task for user %d", user_id)
+    except Exception as e:
+        logger.warning("Celery unavailable (%s), running in background thread", e)
+        t = threading.Thread(target=_run_generation_in_thread, args=(user_id,), daemon=True)
+        t.start()
 
 
 @router.get("/today", response_model=EpisodeResponse)
 def get_today(
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    """Return today's episode. If it doesn't exist yet, kick off generation."""
     today = date.today()
-    episode = (
-        db.query(models.Episode)
-        .filter(models.Episode.user_id == current_user.id, models.Episode.date == today)
-        .first()
-    )
+    episode = db.query(models.Episode).filter(
+        models.Episode.user_id == current_user.id,
+        models.Episode.date == today,
+    ).first()
 
     if episode is None:
-        # Create a placeholder and queue generation
         episode = models.Episode(
-            user_id=current_user.id,
-            date=today,
-            audio_url="",
-            status="pending",
+            user_id=current_user.id, date=today, audio_url="", status="pending",
         )
         db.add(episode)
         db.commit()
         db.refresh(episode)
-        generate_episode_task.delay(current_user.id)
+        _trigger_generation(current_user.id)
 
     elif episode.status == "failed":
-        # Allow retry
         episode.status = "pending"
         db.commit()
-        generate_episode_task.delay(current_user.id)
+        _trigger_generation(current_user.id)
+
+    elif episode.status == "pending":
+        # Stuck pending — re-trigger
+        _trigger_generation(current_user.id)
 
     return episode
 
@@ -52,22 +170,26 @@ def generate_now(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    """Force-regenerate today's episode."""
     today = date.today()
-    episode = (
-        db.query(models.Episode)
-        .filter(models.Episode.user_id == current_user.id, models.Episode.date == today)
-        .first()
-    )
+    episode = db.query(models.Episode).filter(
+        models.Episode.user_id == current_user.id,
+        models.Episode.date == today,
+    ).first()
     if episode and episode.status == "generating":
         return {"detail": "Already generating"}
 
-    generate_episode_task.delay(current_user.id)
+    if episode:
+        episode.status = "pending"
+        db.commit()
+
+    _trigger_generation(current_user.id)
     return {"detail": "Generation started"}
 
 
 @router.get("/", response_model=list[EpisodeResponse])
 def list_episodes(
+    limit: int = 30,
+    offset: int = 0,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -75,7 +197,7 @@ def list_episodes(
         db.query(models.Episode)
         .filter(models.Episode.user_id == current_user.id)
         .order_by(models.Episode.date.desc())
-        .limit(30)
+        .offset(offset).limit(min(limit, 100))
         .all()
     )
 
