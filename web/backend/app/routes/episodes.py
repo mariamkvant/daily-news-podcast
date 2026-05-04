@@ -174,9 +174,8 @@ def get_today(
         db.commit()
         _trigger_generation(current_user.id)
 
-    elif episode.status == "pending":
-        # Stuck pending — re-trigger
-        _trigger_generation(current_user.id)
+    # Note: do NOT re-trigger if status is "pending" or "generating"
+    # — a thread is already running or will be picked up
 
     return episode
 
