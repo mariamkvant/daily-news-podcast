@@ -26,11 +26,12 @@ _TIER1_SOURCES = frozenset([
     "deutsche welle","france 24","who news","nasa news",
 ])
 
-_W_RELEVANCE   = 0.40
+# Scoring weights — relevance is dominant so topics/keywords drive selection
+_W_RELEVANCE   = 0.55  # raised: topics must drive selection
 _W_RECENCY     = 0.20
-_W_CORROBORATE = 0.20
-_W_IMPORTANCE  = 0.12
-_W_AUTHORITY   = 0.08
+_W_CORROBORATE = 0.10  # lowered: corroboration shouldn't override topic match
+_W_IMPORTANCE  = 0.10
+_W_AUTHORITY   = 0.05
 
 
 def score_and_select(
@@ -111,7 +112,13 @@ def _compute_importance(articles):
     return scores
 
 
-def _deduplicate(articles):
+def _deduplicate(articles: list[Article]) -> list[Article]:
+    """
+    Remove near-duplicate articles (same story, same angle).
+    Keep the highest-scored one per story cluster.
+    Uses 0.80 threshold — tight enough to remove true duplicates,
+    loose enough to keep different stories on the same topic.
+    """
     if len(articles) <= 1:
         return list(articles)
     titles = [a.title for a in articles]
@@ -123,8 +130,8 @@ def _deduplicate(articles):
             if not keep[i]:
                 continue
             for j in range(i + 1, len(articles)):
-                if keep[j] and sim[i, j] > 0.85:
-                    keep[j] = False
+                if keep[j] and sim[i, j] > 0.80:
+                    keep[j] = False  # drop lower-scored near-duplicate
         return [a for a, k in zip(articles, keep) if k]
     except ValueError:
         return list(articles)

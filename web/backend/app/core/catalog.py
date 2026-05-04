@@ -68,6 +68,14 @@ ALL_SOURCES: list[tuple[str, str, list[str]]] = [
 ]
 
 DEFAULT_ENABLED_SOURCES = [
-    "BBC News", "Reuters Top News", "NY Times", "Sky News World",
-    "TechCrunch", "The Hacker News",
+    # World
+    "BBC News", "Reuters Top News", "AP News", "NY Times", "Al Jazeera",
+    # Technology
+    "TechCrunch", "The Verge", "Ars Technica",
+    # Business
+    "CNBC Top News", "Bloomberg Markets",
+    # Science/Health
+    "Science Daily", "Medical News Today",
+    # Security
+    "The Hacker News",
 ]
