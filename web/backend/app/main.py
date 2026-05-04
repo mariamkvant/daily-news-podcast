@@ -16,7 +16,19 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up — DATABASE_URL set: %s", bool(os.environ.get("DATABASE_URL")))
     from .database import engine
     from . import models
-    models.Base.metadata.create_all(bind=engine)
+    import time
+    # Retry DB connection up to 5 times (DB may not be ready immediately)
+    for attempt in range(5):
+        try:
+            models.Base.metadata.create_all(bind=engine)
+            logger.info("DB tables created/verified on attempt %d.", attempt + 1)
+            break
+        except Exception as e:
+            logger.warning("DB init attempt %d failed: %s", attempt + 1, e)
+            if attempt < 4:
+                time.sleep(3)
+            else:
+                logger.error("DB init failed after 5 attempts: %s", e)
     Path("/tmp/audio").mkdir(parents=True, exist_ok=True)
     logger.info("Startup complete.")
     yield

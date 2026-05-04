@@ -15,6 +15,11 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 @router.post("/register", response_model=TokenResponse, status_code=201)
 def register(body: RegisterRequest, db: Session = Depends(get_db)):
     try:
+        # Ensure tables exist (safety net)
+        from ..database import engine
+        from .. import models as m
+        m.Base.metadata.create_all(bind=engine)
+
         if db.query(models.User).filter(models.User.email == body.email).first():
             raise HTTPException(status_code=400, detail="Email already registered")
 
