@@ -145,6 +145,13 @@ export default function Home() {
                 <RefreshCw className="animate-spin text-brand-500 mx-auto mb-4" size={32} />
                 <p className="text-white font-medium">Generating your episode…</p>
                 <p className="text-gray-400 text-sm mt-2">Fetching and converting stories</p>
+                <button onClick={async () => {
+                  await fetch(`${import.meta.env.VITE_API_URL || ''}/reset-stuck`, { method: 'GET' })
+                  setGenerating(false)
+                  loadEpisode()
+                }} className="mt-6 text-xs text-gray-600 hover:text-gray-400 transition underline">
+                  Taking too long? Cancel
+                </button>
               </div>
             ) : episode?.status === 'failed' ? (
               <div className="text-center py-12">
