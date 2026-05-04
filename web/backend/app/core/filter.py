@@ -114,10 +114,9 @@ def _compute_importance(articles):
 
 def _deduplicate(articles: list[Article]) -> list[Article]:
     """
-    Remove near-duplicate articles (same story, same angle).
-    Keep the highest-scored one per story cluster.
-    Uses 0.80 threshold — tight enough to remove true duplicates,
-    loose enough to keep different stories on the same topic.
+    Remove near-duplicate articles (same story from different sources).
+    Strategy: cluster articles by title similarity, keep only the highest-scored
+    from each cluster. This ensures topic diversity across the episode.
     """
     if len(articles) <= 1:
         return list(articles)
@@ -130,8 +129,10 @@ def _deduplicate(articles: list[Article]) -> list[Article]:
             if not keep[i]:
                 continue
             for j in range(i + 1, len(articles)):
-                if keep[j] and sim[i, j] > 0.80:
-                    keep[j] = False  # drop lower-scored near-duplicate
+                # 0.40 threshold — catches "same story, different headline" duplicates
+                # while keeping genuinely different stories on the same broad topic
+                if keep[j] and sim[i, j] > 0.40:
+                    keep[j] = False
         return [a for a, k in zip(articles, keep) if k]
     except ValueError:
         return list(articles)
