@@ -70,24 +70,26 @@ def _run_generation_in_thread(user_id: int) -> None:
             audio_dir = Path(tmpdir)
 
             # Generate TTS segments in parallel (6 workers)
+            # Use a lock to prevent race conditions on the temp directory
             segments_map: dict[int, object] = {}
-            with ThreadPoolExecutor(max_workers=6) as executor:
-                futures = {
-                    executor.submit(generate_segment, article, audio_dir): i
-                    for i, article in enumerate(filtered)
-                }
-                for future in as_completed(futures):
-                    idx = futures[future]
-                    try:
-                        seg = future.result()
-                        if seg:
+            lock = threading.Lock()
+
+            def _gen_segment(idx_article):
+                idx, article = idx_article
+                try:
+                    seg = generate_segment(article, audio_dir)
+                    if seg:
+                        with lock:
                             segments_map[idx] = seg
-                    except Exception as e:
-                        logger.warning("User %d: TTS failed for article %d: %s", user_id, idx, e)
+                except Exception as e:
+                    logger.warning("User %d: TTS failed for article %d: %s", user_id, idx, e)
+
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                list(executor.map(_gen_segment, enumerate(filtered)))
 
             # Restore original order
             segments = [segments_map[i] for i in sorted(segments_map.keys())]
-            logger.info("User %d: generated %d segments in parallel", user_id, len(segments))
+            logger.info("User %d: generated %d/%d segments", user_id, len(segments), len(filtered))
 
             if not segments:
                 episode_row.status = "failed"
@@ -129,7 +131,7 @@ def _run_generation_in_thread(user_id: int) -> None:
             logger.info("User %d: episode ready at %s", user_id, ep_url)
 
     except Exception as exc:
-        logger.exception("Episode generation failed for user %d: %s", user_id, exc)
+        logger.exception("Episode generation failed for user %d at step unknown: %s", user_id, exc)
         if episode_row:
             try:
                 episode_row.status = "failed"
