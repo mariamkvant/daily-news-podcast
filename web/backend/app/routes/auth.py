@@ -15,6 +15,11 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 @router.post("/register", response_model=TokenResponse, status_code=201)
 def register(body: RegisterRequest, db: Session = Depends(get_db)):
     try:
+        if len(body.password) > 72:
+            raise HTTPException(status_code=400, detail="Password must be 72 characters or fewer")
+        if len(body.password) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
         # Ensure tables exist (safety net)
         from ..database import engine
         from .. import models as m
