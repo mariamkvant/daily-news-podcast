@@ -18,6 +18,7 @@ export default function Home() {
   const [currentIdx, setCurrentIdx] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [elapsed, setElapsed] = useState(0)
+  const [speed, setSpeed] = useState(1)
   const audioRef = useRef<HTMLAudioElement>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -67,6 +68,7 @@ export default function Home() {
     const audio = audioRef.current
     if (!audio || !seg) return
     audio.src = seg.audio_url
+    audio.playbackRate = speed
     if (playing) audio.play().catch(() => {})
   }, [currentIdx, seg?.audio_url])
 
@@ -75,6 +77,11 @@ export default function Home() {
     if (!audio) return
     if (playing) { audio.pause(); setPlaying(false) }
     else { audio.play(); setPlaying(true) }
+  }
+
+  function changeSpeed(s: number) {
+    setSpeed(s)
+    if (audioRef.current) audioRef.current.playbackRate = s
   }
 
   function skip() {
@@ -193,6 +200,21 @@ export default function Home() {
                   <button onClick={skip} className="text-gray-400 hover:text-white transition p-2">
                     <SkipForward size={20} />
                   </button>
+                </div>
+
+                {/* Speed control */}
+                <div className="flex items-center justify-center gap-1 mt-4">
+                  {[0.75, 1, 1.25, 1.5, 2].map(s => (
+                    <button key={s} onClick={() => changeSpeed(s)}
+                      className={clsx(
+                        'px-2.5 py-1 rounded-lg text-xs font-medium transition',
+                        speed === s
+                          ? 'bg-brand-500 text-white'
+                          : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
+                      )}>
+                      {s}x
+                    </button>
+                  ))}
                 </div>
 
                 <button onClick={generateNow} disabled={generating}
