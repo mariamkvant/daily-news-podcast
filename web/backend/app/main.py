@@ -50,14 +50,33 @@ def db_check():
 
 
 def _init_db():
-    """Run DB table creation in a background thread so startup is instant."""
+    """Run DB table creation and migrations in a background thread."""
     import time
     for attempt in range(10):
         try:
             from .database import engine
             from . import models
+            from sqlalchemy import text
+
+            # Create any missing tables
             models.Base.metadata.create_all(bind=engine)
-            logger.info("DB tables ready (attempt %d).", attempt + 1)
+
+            # Run column migrations for existing tables
+            with engine.connect() as conn:
+                migrations = [
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE",
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS verify_token VARCHAR(255)",
+                    # Set existing users as verified so they can still log in
+                    "UPDATE users SET is_verified = TRUE WHERE is_verified IS NULL OR is_verified = FALSE",
+                ]
+                for sql in migrations:
+                    try:
+                        conn.execute(text(sql))
+                    except Exception as e:
+                        logger.warning("Migration skipped: %s", e)
+                conn.commit()
+
+            logger.info("DB ready (attempt %d).", attempt + 1)
             return
         except Exception as e:
             logger.warning("DB init attempt %d failed: %s", attempt + 1, e)
