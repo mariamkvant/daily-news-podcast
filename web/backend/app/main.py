@@ -49,6 +49,33 @@ def db_check():
         return {"db": "error", "detail": str(e)}
 
 
+@app.post("/run-migrations")
+def run_migrations():
+    """Force-run DB migrations immediately."""
+    try:
+        from .database import engine
+        from . import models
+        from sqlalchemy import text
+        models.Base.metadata.create_all(bind=engine)
+        results = []
+        migrations = [
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS verify_token VARCHAR(255)",
+            "UPDATE users SET is_verified = TRUE WHERE is_verified IS NULL OR is_verified = FALSE",
+        ]
+        with engine.connect() as conn:
+            for sql in migrations:
+                try:
+                    conn.execute(text(sql))
+                    results.append({"sql": sql[:50], "status": "ok"})
+                except Exception as e:
+                    results.append({"sql": sql[:50], "status": str(e)})
+            conn.commit()
+        return {"status": "done", "results": results}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
 def _init_db():
     """Run DB table creation and migrations in a background thread."""
     import time
