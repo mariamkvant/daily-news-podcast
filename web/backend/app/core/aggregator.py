@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import feedparser
 
@@ -17,36 +18,51 @@ class Article:
     relevance_score: float = 0.0
 
 
+def _fetch_one(name: str, url: str, since: datetime) -> list[Article]:
+    articles = []
+    try:
+        feed = feedparser.parse(url)
+        for entry in feed.entries:
+            ts = entry.get("published_parsed") or entry.get("updated_parsed")
+            if ts is None:
+                continue
+            published_at = datetime(*ts[:6])
+            if published_at < since:
+                continue
+            link = entry.get("link", "")
+            if not link:
+                continue
+            summary = entry.get("summary", "") or entry.get("description", "")
+            articles.append(Article(
+                title=entry.get("title", ""),
+                summary=summary,
+                url=link,
+                source_name=name,
+                published_at=published_at,
+            ))
+    except Exception as exc:
+        logger.warning("Failed to fetch %s: %s", url, exc)
+    return articles
+
+
 def fetch_articles(
-    sources: list[tuple[str, str]],  # [(name, url), ...]
+    sources: list[tuple[str, str]],
     since: datetime,
 ) -> list[Article]:
-    articles: list[Article] = []
+    """Fetch all RSS sources in parallel."""
+    all_articles: list[Article] = []
     seen_urls: set[str] = set()
 
-    for name, url in sources:
-        try:
-            feed = feedparser.parse(url)
-            for entry in feed.entries:
-                ts = entry.get("published_parsed") or entry.get("updated_parsed")
-                if ts is None:
-                    continue
-                published_at = datetime(*ts[:6])
-                if published_at < since:
-                    continue
-                link = entry.get("link", "")
-                if link in seen_urls:
-                    continue
-                seen_urls.add(link)
-                summary = entry.get("summary", "") or entry.get("description", "")
-                articles.append(Article(
-                    title=entry.get("title", ""),
-                    summary=summary,
-                    url=link,
-                    source_name=name,
-                    published_at=published_at,
-                ))
-        except Exception as exc:
-            logger.warning("Failed to fetch %s: %s", url, exc)
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_fetch_one, name, url, since): (name, url)
+                   for name, url in sources}
+        for future in as_completed(futures):
+            try:
+                for article in future.result():
+                    if article.url not in seen_urls:
+                        seen_urls.add(article.url)
+                        all_articles.append(article)
+            except Exception as e:
+                logger.warning("Feed fetch error: %s", e)
 
-    return articles
+    return all_articles

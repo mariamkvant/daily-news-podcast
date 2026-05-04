@@ -16,6 +16,7 @@ router = APIRouter(prefix="/api/episodes", tags=["episodes"])
 def _run_generation_in_thread(user_id: int) -> None:
     """Run episode generation directly in a background thread (no Celery needed)."""
     import tempfile
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from datetime import datetime, timedelta
     from pathlib import Path
     from ..core.aggregator import fetch_articles
@@ -61,14 +62,32 @@ def _run_generation_in_thread(user_id: int) -> None:
         )
         logger.info("User %d: filtered to %d articles", user_id, len(filtered))
 
+        # Cap at 5 articles for speed — enough for a good episode
+        max_articles = min(len(filtered), 5)
+        filtered = filtered[:max_articles]
+
         with tempfile.TemporaryDirectory() as tmpdir:
             audio_dir = Path(tmpdir)
-            segments = []
-            for article in filtered:
-                seg = generate_segment(article, audio_dir)
-                if seg:
-                    segments.append(seg)
-            logger.info("User %d: generated %d segments", user_id, len(segments))
+
+            # Generate TTS segments in parallel (4 workers)
+            segments_map: dict[int, object] = {}
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = {
+                    executor.submit(generate_segment, article, audio_dir): i
+                    for i, article in enumerate(filtered)
+                }
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    try:
+                        seg = future.result()
+                        if seg:
+                            segments_map[idx] = seg
+                    except Exception as e:
+                        logger.warning("User %d: TTS failed for article %d: %s", user_id, idx, e)
+
+            # Restore original order
+            segments = [segments_map[i] for i in sorted(segments_map.keys())]
+            logger.info("User %d: generated %d segments in parallel", user_id, len(segments))
 
             if not segments:
                 episode_row.status = "failed"
