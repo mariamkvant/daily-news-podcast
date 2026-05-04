@@ -1,7 +1,7 @@
 [build]
-builder = "dockerfile"
-dockerfilePath = "Dockerfile"
+builder = "nixpacks"
 
 [deploy]
-startCommand = "nginx -g 'daemon off;'"
+startCommand = "npx serve -s dist -l $PORT"
 healthcheckPath = "/"
+healthcheckTimeout = 60
