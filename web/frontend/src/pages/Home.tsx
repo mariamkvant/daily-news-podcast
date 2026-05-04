@@ -38,6 +38,8 @@ export default function Home() {
         startPolling()
       } else {
         setGenerating(false)
+        setCurrentIdx(0)
+        setElapsed(0)
       }
     } finally {
       setLoading(false)
@@ -54,6 +56,7 @@ export default function Home() {
       setEpisode(data)
       if (data.status === 'ready' || data.status === 'failed') {
         setGenerating(false)
+        if (data.status === 'ready') { setCurrentIdx(0); setElapsed(0) }
         clearInterval(pollRef.current!)
         pollRef.current = null
       }
