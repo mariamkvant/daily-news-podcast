@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Play, Pause, SkipForward, RotateCcw, RefreshCw, Settings, Mic, LogOut } from 'lucide-react'
+import { Play, Pause, SkipForward, RotateCcw, RefreshCw, Settings, Mic, LogOut, SlidersHorizontal } from 'lucide-react'
 import api, { Episode, Segment } from '../api'
 import { useAuthStore } from '../store'
 import clsx from 'clsx'
@@ -114,13 +114,15 @@ export default function Home() {
           <Mic className="text-brand-500" size={20} />
           Daily News Podcast
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <span className="text-gray-400 text-sm hidden sm:block">Hi, {user?.name}</span>
-          <Link to="/settings" className="text-gray-400 hover:text-white transition">
-            <Settings size={20} />
+          <Link to="/settings"
+            className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 hover:border-gray-500 text-gray-300 hover:text-white px-3 py-1.5 rounded-lg text-sm font-medium transition">
+            <SlidersHorizontal size={14} />
+            <span>Customise</span>
           </Link>
-          <button onClick={logout} className="text-gray-400 hover:text-white transition">
-            <LogOut size={20} />
+          <button onClick={logout} className="text-gray-400 hover:text-white transition p-1.5 rounded-lg hover:bg-gray-800">
+            <LogOut size={18} />
           </button>
         </div>
       </header>
@@ -204,7 +206,14 @@ export default function Home() {
 
         {/* Story list */}
         <div className="flex-1">
-          <h3 className="text-white font-semibold text-lg mb-4">Today's Stories</h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-white font-semibold text-lg">Today's Stories</h3>
+            <Link to="/settings"
+              className="flex items-center gap-1.5 text-sm text-brand-500 hover:text-brand-400 transition">
+              <SlidersHorizontal size={14} />
+              Customise feed
+            </Link>
+          </div>
           {episode?.segments.map((s, i) => (
             <button key={s.id} onClick={() => jumpTo(i)}
               className={clsx(
