@@ -84,8 +84,14 @@ export default function Home() {
   function togglePlay() {
     const audio = audioRef.current
     if (!audio) return
-    if (playing) { audio.pause(); setPlaying(false) }
-    else { audio.play(); setPlaying(true) }
+    if (playing) {
+      audio.pause()
+      setPlaying(false)
+    } else {
+      audio.play()
+        .then(() => setPlaying(true))
+        .catch(e => console.error('Play failed:', e))
+    }
   }
 
   function changeSpeed(s: number) {
@@ -96,22 +102,33 @@ export default function Home() {
   function skip() {
     if (!episode) return
     const next = currentIdx + 1
-    if (next < episode.segments.length) { setCurrentIdx(next); setElapsed(0) }
-    else { setPlaying(false) }
+    if (next < episode.segments.length) {
+      setCurrentIdx(next)
+      setElapsed(0)
+      // Auto-play next segment
+      setTimeout(() => {
+        const audio = audioRef.current
+        if (audio) audio.play().then(() => setPlaying(true)).catch(() => {})
+      }, 100)
+    } else {
+      setPlaying(false)
+    }
   }
 
   function replay() {
     const audio = audioRef.current
     if (!audio) return
     audio.currentTime = 0
-    audio.play()
-    setPlaying(true)
+    audio.play().then(() => setPlaying(true)).catch(() => {})
   }
 
   function jumpTo(idx: number) {
     setCurrentIdx(idx)
     setElapsed(0)
-    setPlaying(true)
+    setTimeout(() => {
+      const audio = audioRef.current
+      if (audio) audio.play().then(() => setPlaying(true)).catch(() => {})
+    }, 100)
   }
 
   async function generateNow() {
