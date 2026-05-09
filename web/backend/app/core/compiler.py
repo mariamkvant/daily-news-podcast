@@ -41,7 +41,13 @@ def compile_episode(
     # Concatenate with ffmpeg
     episode_path = audio_dir / f"episode_{episode_date.isoformat()}.mp3"
     if selected:
-        _concat_mp3([s.audio_path for s in selected], str(episode_path))
+        try:
+            _concat_mp3([s.audio_path for s in selected], str(episode_path))
+        except Exception as e:
+            logger.error("ffmpeg concat failed: %s — using first segment as episode", e)
+            # Fallback: just use the first segment as the episode
+            import shutil
+            shutil.copy2(selected[0].audio_path, str(episode_path))
 
     # Build episode summary
     titles = [s.title for s in selected]
