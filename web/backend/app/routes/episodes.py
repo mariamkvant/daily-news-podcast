@@ -87,13 +87,17 @@ def _run_generation_in_thread(user_id: int) -> None:
                 logger.error("User %d: no segments generated", user_id)
                 return
 
+            logger.info("User %d: compiling episode", user_id)
             episode = compile_episode(
                 segments, today, audio_dir,
                 max_duration_seconds=user.max_duration_sec or 600,
             )
+            logger.info("User %d: episode compiled, duration=%d ms", user_id, episode.total_duration_ms)
 
             ep_key = f"users/{user_id}/episodes/{today.isoformat()}.mp3"
+            logger.info("User %d: uploading episode audio", user_id)
             ep_url = upload_audio(episode.audio_path, ep_key)
+            logger.info("User %d: episode uploaded to %s", user_id, ep_url)
 
             episode_row.audio_url = ep_url
             episode_row.total_duration_ms = episode.total_duration_ms
