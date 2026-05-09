@@ -66,20 +66,24 @@ def compile_episode(
 
 
 def _concat_mp3(input_paths: list[str], output_path: str) -> None:
-    """Concatenate MP3 files using ffmpeg concat demuxer."""
-    import tempfile, os
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
-        for p in input_paths:
-            f.write(f"file '{p}'\n")
-        list_file = f.name
+    """Concatenate MP3 files using ffmpeg filter_complex (more reliable than concat demuxer)."""
+    import os
+    if len(input_paths) == 1:
+        import shutil
+        shutil.copy2(input_paths[0], output_path)
+        return
+
+    # Build ffmpeg command with multiple inputs
+    cmd = ["ffmpeg", "-y"]
+    for p in input_paths:
+        cmd += ["-i", p]
+    # Use concat filter
+    n = len(input_paths)
+    filter_str = "".join(f"[{i}:a]" for i in range(n)) + f"concat=n={n}:v=0:a=1[out]"
+    cmd += ["-filter_complex", filter_str, "-map", "[out]", output_path]
+
     try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
-             "-i", list_file, "-c", "copy", output_path],
-            capture_output=True, timeout=120, check=True,
-        )
+        result = subprocess.run(cmd, capture_output=True, timeout=60, check=True)
     except subprocess.CalledProcessError as e:
-        logger.error("ffmpeg concat failed: %s", e.stderr.decode())
+        logger.error("ffmpeg concat failed: %s", e.stderr.decode()[:500])
         raise
-    finally:
-        os.unlink(list_file)
